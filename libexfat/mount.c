@@ -181,6 +181,28 @@ static void exfat_free(struct exfat* ef)
 	ef->sb = NULL;
 }
 
+static bool check_fs_size(off_t device_size, off_t unit_size, off_t count,
+		const char* unit_name)
+{
+	if (count * unit_size > device_size + unit_size)
+	{
+		exfat_error("file system in %ss is larger than device: "
+				"%"PRIu64" > %"PRIu64, unit_name, count * unit_size,
+				device_size);
+		return false;
+	}
+
+	if (count * unit_size > device_size)
+	{
+		/* this can cause I/O errors later but we don't fail mounting to
+		   let user rescue data */
+		exfat_warn("file system in %ss is larger than device: "
+				"%"PRIu64" > %"PRIu64, unit_name, count * unit_size,
+				device_size);
+	}
+	return true;
+}
+
 int exfat_mount(struct exfat* ef, const char* spec, const char* options)
 {
 	int rc;
@@ -271,15 +293,13 @@ int exfat_mount(struct exfat* ef, const char* spec, const char* options)
 		exfat_free(ef);
 		return -EIO;
 	}
-	if (le64_to_cpu(ef->sb->sector_count) * SECTOR_SIZE(*ef->sb) >
-			exfat_get_size(ef->dev))
+	if (!check_fs_size(exfat_get_size(ef->dev), SECTOR_SIZE(*ef->sb),
+				le64_to_cpu(ef->sb->sector_count), "sector") ||
+		!check_fs_size(exfat_get_size(ef->dev), CLUSTER_SIZE(*ef->sb),
+				le32_to_cpu(ef->sb->cluster_count), "cluster"))
 	{
-		/* this can cause I/O errors later but we don't fail mounting to let
-		   user rescue data */
-		exfat_warn("file system is larger than underlying device: "
-				"%"PRIu64" > %"PRIu64,
-				le64_to_cpu(ef->sb->sector_count) * SECTOR_SIZE(*ef->sb),
-				exfat_get_size(ef->dev));
+		exfat_free(ef);
+		return -EIO;
 	}
 
 	ef->root = malloc(sizeof(struct exfat_node));
